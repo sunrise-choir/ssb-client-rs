@@ -43,7 +43,7 @@ impl<R: AsyncRead, W: AsyncWrite> Client<R, W> {
     }
 
     #[cfg(feature = "ssb")]
-    fn whoami(&mut self) -> (SendRpc<W>, Whoami<R>) {
+    pub fn whoami(&mut self) -> (SendRpc<W>, Whoami<R>) {
         ssb::whoami(self)
     }
 }
