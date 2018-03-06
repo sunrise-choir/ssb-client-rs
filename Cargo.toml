@@ -1,0 +1,14 @@
+[package]
+name = "ssb-client"
+version = "0.1.0"
+authors = ["AljoschaMeyer <mail@aljoscha-meyer.de>"]
+description = "A client library for interfacing with ssb."
+repository = "https://github.com/ssbc/ssb-client-rs"
+readme = "README.md"
+license = "GPL-3.0"
+
+[features]
+default = ["ssb"]
+ssb = [] # Core rpcs from https://github.com/ssbc/scuttlebot/blob/master/api.md
+
+[dependencies]
