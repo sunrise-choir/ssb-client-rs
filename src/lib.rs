@@ -38,11 +38,12 @@ pub struct Client<R: AsyncRead, W>(RpcOut<R, W>);
 impl<R: AsyncRead, W: AsyncWrite> Client<R, W> {
     /// Close the connection to the server. If there are still active rpcs, it is not closed
     /// immediately. It will get closed once the last of them is done.
-    fn close(self) -> Close<R, W> {
+    pub fn close(self) -> Close<R, W> {
         Close(self.0.close())
     }
 
     #[cfg(feature = "ssb")]
+    /// Query information about the current user.
     pub fn whoami(&mut self) -> (SendRpc<W>, Whoami<R>) {
         ssb::whoami(self)
     }
