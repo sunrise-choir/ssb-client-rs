@@ -12,3 +12,10 @@ default = ["ssb"]
 ssb = [] # Core rpcs from https://github.com/ssbc/scuttlebot/blob/master/api.md
 
 [dependencies]
+futures = "0.1.17"
+ssb-common = "0.2.4"
+ssb-rpc = "0.1.0"
+muxrpc = "0.1.0"
+tokio-io = "0.1.5"
+lazy_static = "1.0.0"
+serde_json = "1.0.9"
