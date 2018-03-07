@@ -1,7 +1,32 @@
 //! A client library for interfacing with ssb.
-// TODO example
+//!
+//! ```rust,ignore
+//! sodiumoxide::init();
+//! let addr = SocketAddr::new(Ipv6Addr::localhost().into(), DEFAULT_TCP_PORT);
+//!
+//! current_thread::run(|_| {
+//!     current_thread::spawn(TcpStream::connect(&addr)
+//!     .and_then(|tcp| easy_ssb(tcp).unwrap().map_err(|err| panic!("{:?}", err)))
+//!     .map_err(|err| panic!("{:?}", err))
+//!     .map(|(mut client, receive, _)| {
+//!         current_thread::spawn(receive.map_err(|err| panic!("{:?}", err)));
+//!
+//!         let (send_request, response) = client.whoami();
+//!
+//!         current_thread::spawn(send_request.map_err(|err| panic!("{:?}", err)));
+//!         current_thread::spawn(response
+//!                                   .map(|res| println!("{:?}", res))
+//!                                   .map_err(|err| panic!("{:?}", err))
+//!                                   .and_then(|_| {
+//!                                                 client.close().map_err(|err| panic!("{:?}", err))
+//!                                             }));
+//!     }))
+//! });
+//! ```
 
 #![deny(missing_docs)]
+#![feature(try_from)]
+#![feature(ip_constructors)] // only for tests
 
 #[macro_use]
 extern crate futures;
@@ -12,13 +37,29 @@ extern crate tokio_io;
 #[macro_use]
 extern crate lazy_static;
 extern crate serde_json;
+extern crate ssb_keyfile;
+extern crate secret_stream;
+extern crate secret_handshake;
+extern crate box_stream;
+extern crate sodiumoxide;
+#[cfg(test)]
+extern crate tokio;
 
+use std::convert::{From, TryInto};
 use std::io;
 
 use futures::prelude::*;
+use futures::future::Then;
 use futures::unsync::oneshot::Canceled;
 use muxrpc::{muxrpc, RpcIn, RpcOut, Closed as RpcClosed, CloseRpc, RpcError, OutSync};
 use tokio_io::{AsyncRead, AsyncWrite};
+use tokio_io::io::{ReadHalf, WriteHalf};
+use ssb_keyfile::{KeyfileError, load_or_create_keys};
+use secret_stream::OwningClient;
+use ssb_common::MAINNET_IDENTIFIER;
+use sodiumoxide::crypto::box_;
+use box_stream::BoxDuplex;
+use secret_handshake::ClientHandshakeFailure;
 
 #[cfg(feature = "ssb")]
 mod ssb;
@@ -26,7 +67,46 @@ mod ssb;
 pub use ssb::Whoami;
 
 /// Take ownership of an AsyncRead and an AsyncWrite to create an ssb client.
-// TODO example
+///
+/// # Example
+///
+/// ```rust,ignore
+/// sodiumoxide::init();
+///
+/// let (pk, sk) = load_or_create_keys().unwrap();
+/// let pk = pk.try_into().unwrap();
+/// let sk = sk.try_into().unwrap();
+/// let (ephemeral_pk, ephemeral_sk) = box_::gen_keypair();
+///
+/// let addr = SocketAddr::new(Ipv6Addr::localhost().into(), DEFAULT_TCP_PORT);
+///
+/// current_thread::run(|_| {
+///     current_thread::spawn(TcpStream::connect(&addr)
+///                               .and_then(move |tcp| {
+///         // Performs a secret-handshake and yields an encrypted duplex connection.
+///         OwningClient::new(tcp,
+///                           &MAINNET_IDENTIFIER,
+///                           &pk, &sk,
+///                           &ephemeral_pk, &ephemeral_sk,
+///                           &pk)
+///                 .map_err(|(err, _)| err)
+///     })
+///       .map_err(|err| panic!("{:?}", err))
+///       .map(move |connection| {
+///         let (read, write) = connection.unwrap().split();
+///         let (mut client, receive, _) = ssb(read, write);
+///         current_thread::spawn(receive.map_err(|err| panic!("{:?}", err)));
+///
+///         let (send_request, response) = client.whoami();
+///
+///         current_thread::spawn(send_request.map_err(|err| panic!("{:?}", err)));
+///         current_thread::spawn(response
+///                                   .map(|res| println!("{:?}", res))
+///                                   .map_err(|err| panic!("{:?}", err))
+///                                   .and_then(|_| client.close().map_err(|err| panic!("{:?}", err))));
+///     }))
+/// });
+/// ```
 pub fn ssb<R: AsyncRead, W: AsyncWrite>(r: R, w: W) -> (Client<R, W>, Receive<R, W>, Closed<W>) {
     let (rpc_in, rpc_out, rpc_closed) = muxrpc(r, w);
     (Client(rpc_out), Receive(rpc_in), Closed(rpc_closed))
@@ -40,6 +120,12 @@ impl<R: AsyncRead, W: AsyncWrite> Client<R, W> {
     /// immediately. It will get closed once the last of them is done.
     pub fn close(self) -> Close<R, W> {
         Close(self.0.close())
+    }
+
+    /// Give access to the underlying muxrpc `RpcOut`, to send rpcs which are not directly
+    /// supported by this module.
+    pub fn muxrpc(&mut self) -> &mut RpcOut<R, W> {
+        &mut self.0
     }
 
     #[cfg(feature = "ssb")]
@@ -116,4 +202,138 @@ impl<W: AsyncWrite> Future for SendRpc<W> {
 
 enum _SendRpc<W: AsyncWrite> {
     Sync(OutSync<W>),
+}
+
+/// Return a future for setting up an encrypted connection via the given transport
+/// (using keys from the ssb keyfile) and then calling `ssb` on the connection.
+///
+/// This function performs blocking file io (for reading the keyfile).
+///
+/// This function uses libsodium internally, so ensure that `sodiumoxide::init()` has been called
+/// before using this function.
+///
+/// # Example
+///
+/// ```rust,ignore
+/// sodiumoxide::init();
+/// let addr = SocketAddr::new(Ipv6Addr::localhost().into(), DEFAULT_TCP_PORT);
+///
+/// current_thread::run(|_| {
+///     current_thread::spawn(TcpStream::connect(&addr)
+///     .and_then(|tcp| easy_ssb(tcp).unwrap().map_err(|err| panic!("{:?}", err)))
+///     .map_err(|err| panic!("{:?}", err))
+///     .map(|(mut client, receive, _)| {
+///         current_thread::spawn(receive.map_err(|err| panic!("{:?}", err)));
+///
+///         let (send_request, response) = client.whoami();
+///
+///         current_thread::spawn(send_request.map_err(|err| panic!("{:?}", err)));
+///         current_thread::spawn(response
+///                                   .map(|res| println!("{:?}", res))
+///                                   .map_err(|err| panic!("{:?}", err))
+///                                   .and_then(|_| {
+///                                                 client.close().map_err(|err| panic!("{:?}", err))
+///                                             }));
+///     }))
+/// });
+/// ```
+pub fn easy_ssb<T: AsyncRead + AsyncWrite>(transport: T) -> Result<EasySsb<T>, KeyfileError> {
+    let (pk, sk) = load_or_create_keys()?;
+    let pk = pk.try_into().unwrap();
+    let sk = sk.try_into().unwrap();
+    let (ephemeral_pk, ephemeral_sk) = box_::gen_keypair();
+
+    Ok(EasySsb::new(OwningClient::new(transport,
+                                      &MAINNET_IDENTIFIER,
+                                      &pk,
+                                      &sk,
+                                      &ephemeral_pk,
+                                      &ephemeral_sk,
+                                      &pk)))
+}
+
+type AR<T> = ReadHalf<BoxDuplex<T>>;
+type AW<T> = WriteHalf<BoxDuplex<T>>;
+type ClientTriple<T> = (Client<AR<T>, AW<T>>, Receive<AR<T>, AW<T>>, Closed<AW<T>>);
+
+/// A future for setting up an encrypted connection via the given AsyncRead and AsyncWrite
+/// (using keys from the ssb keyfile) and then calling `ssb` on the connection.
+pub struct EasySsb<T: AsyncRead + AsyncWrite>(Then<OwningClient<T>,
+                                                    Result<ClientTriple<T>, EasySsbError<T>>,
+                                                    fn(Result<Result<BoxDuplex<T>,
+                                                                     (ClientHandshakeFailure,
+                                                                      T)>,
+                                                              (io::Error, T)>)
+                                                       -> Result<ClientTriple<T>,
+                                                                  EasySsbError<T>>>);
+
+impl<T: AsyncRead + AsyncWrite> EasySsb<T> {
+    fn new(secret_client: OwningClient<T>) -> EasySsb<T> {
+        EasySsb(secret_client.then(|res| match res {
+                                       Ok(Ok(duplex)) => {
+            let (read, write) = duplex.split();
+            Ok(ssb(read, write))
+        }
+                                       Ok(Err((failure, transport))) => {
+                                           Err(EasySsbError::FailedHandshake(failure, transport))
+                                       }
+                                       Err((err, transport)) => {
+                                           Err(EasySsbError::IoError(err, transport))
+                                       }
+                                   }))
+    }
+}
+
+impl<T: AsyncRead + AsyncWrite> Future for EasySsb<T> {
+    type Item = (Client<AR<T>, AW<T>>, Receive<AR<T>, AW<T>>, Closed<AW<T>>);
+    type Error = EasySsbError<T>;
+
+    fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
+        self.0.poll()
+    }
+}
+
+/// Everything that can go wrong when creating a client via `easy_ssb`.
+#[derive(Debug)]
+pub enum EasySsbError<T> {
+    /// The handshake was performed without io errors but did not terminate successfully.
+    FailedHandshake(ClientHandshakeFailure, T),
+    /// An io error happened during the handshake.
+    IoError(io::Error, T),
+}
+
+#[cfg(test)]
+mod tests {
+    use std::net::{SocketAddr, Ipv6Addr};
+
+    use tokio::executor::current_thread;
+    use tokio::net::TcpStream;
+    use ssb_common::*;
+
+    use super::*;
+
+    #[test]
+    fn test_easy_ssb() {
+        sodiumoxide::init();
+        let addr = SocketAddr::new(Ipv6Addr::localhost().into(), DEFAULT_TCP_PORT);
+
+        current_thread::run(|_| {
+            current_thread::spawn(TcpStream::connect(&addr)
+            .and_then(|tcp| easy_ssb(tcp).unwrap().map_err(|err| panic!("{:?}", err)))
+            .map_err(|err| panic!("{:?}", err))
+            .map(|(mut client, receive, _)| {
+                current_thread::spawn(receive.map_err(|err| panic!("{:?}", err)));
+
+                let (send_request, response) = client.whoami();
+
+                current_thread::spawn(send_request.map_err(|err| panic!("{:?}", err)));
+                current_thread::spawn(response
+                                          .map(|res| println!("{:?}", res))
+                                          .map_err(|err| panic!("{:?}", err))
+                                          .and_then(|_| {
+                                                        client.close().map_err(|err| panic!("{:?}", err))
+                                                    }));
+            }))
+        });
+    }
 }
