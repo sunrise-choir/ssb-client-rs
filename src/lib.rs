@@ -244,12 +244,12 @@ pub fn easy_ssb<T: AsyncRead + AsyncWrite>(transport: T) -> Result<EasySsb<T>, K
     let (ephemeral_pk, ephemeral_sk) = box_::gen_keypair();
 
     Ok(EasySsb::new(OwningClient::new(transport,
-                                      &MAINNET_IDENTIFIER,
-                                      &pk,
-                                      &sk,
-                                      &ephemeral_pk,
-                                      &ephemeral_sk,
-                                      &pk)))
+                                      MAINNET_IDENTIFIER.clone(),
+                                      pk,
+                                      sk,
+                                      ephemeral_pk,
+                                      ephemeral_sk,
+                                      pk)))
 }
 
 type AR<T> = ReadHalf<BoxDuplex<T>>;

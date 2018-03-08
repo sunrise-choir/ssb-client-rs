@@ -1,6 +1,6 @@
 [package]
 name = "ssb-client"
-version = "0.2.0"
+version = "0.2.1"
 authors = ["AljoschaMeyer <mail@aljoscha-meyer.de>"]
 description = "A client library for interfacing with ssb."
 repository = "https://github.com/ssbc/ssb-client-rs"
@@ -20,8 +20,8 @@ tokio-io = "0.1.5"
 lazy_static = "1.0.0"
 serde_json = "1.0.9"
 sodiumoxide = "0.0.16"
-secret_stream = "0.1.2"
+secret_stream = "0.2.0"
 ssb-keyfile = "0.1.2"
 tokio = "0.1.1"
 box_stream = "0.4.0"
-secret_handshake = "3.0.2"
+secret_handshake = "4.0.0"
