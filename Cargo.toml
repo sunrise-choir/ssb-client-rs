@@ -1,6 +1,6 @@
 [package]
 name = "ssb-client"
-version = "0.1.0"
+version = "0.2.0"
 authors = ["AljoschaMeyer <mail@aljoscha-meyer.de>"]
 description = "A client library for interfacing with ssb."
 repository = "https://github.com/ssbc/ssb-client-rs"
@@ -14,8 +14,8 @@ ssb = [] # Core rpcs from https://github.com/ssbc/scuttlebot/blob/master/api.md
 [dependencies]
 futures = "0.1.17"
 ssb-common = "0.2.4"
-ssb-rpc = "0.1.0"
-muxrpc = "0.1.0"
+ssb-rpc = "0.2.0"
+muxrpc = "0.2.0"
 tokio-io = "0.1.5"
 lazy_static = "1.0.0"
 serde_json = "1.0.9"
