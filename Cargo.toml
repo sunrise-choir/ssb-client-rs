@@ -1,6 +1,6 @@
 [package]
 name = "ssb-client"
-version = "0.2.1"
+version = "0.3.0"
 authors = ["AljoschaMeyer <mail@aljoscha-meyer.de>"]
 description = "A client library for interfacing with ssb."
 repository = "https://github.com/ssbc/ssb-client-rs"
