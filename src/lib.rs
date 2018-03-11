@@ -36,6 +36,7 @@ extern crate ssb_rpc;
 extern crate tokio_io;
 #[macro_use]
 extern crate lazy_static;
+extern crate serde;
 extern crate serde_json;
 extern crate ssb_keyfile;
 extern crate secret_stream;
@@ -51,20 +52,22 @@ use std::io;
 use futures::prelude::*;
 use futures::future::Then;
 use futures::unsync::oneshot::Canceled;
-use muxrpc::{muxrpc, RpcIn, RpcOut, Closed as RpcClosed, CloseRpc, RpcError, OutSync};
+use muxrpc::{muxrpc, RpcIn, RpcOut, Closed as RpcClosed, CloseRpc, RpcError, OutSync, OutAsync};
 use tokio_io::{AsyncRead, AsyncWrite};
 use tokio_io::io::{ReadHalf, WriteHalf};
 use ssb_keyfile::{KeyfileError, load_or_create_keys};
 use secret_stream::OwningClient;
 use ssb_common::MAINNET_IDENTIFIER;
+use ssb_common::links::MessageId;
 use sodiumoxide::crypto::box_;
 use box_stream::BoxDuplex;
 use secret_handshake::ClientHandshakeFailure;
+use serde::de::DeserializeOwned;
 
 #[cfg(feature = "ssb")]
 mod ssb;
 #[cfg(feature = "ssb")]
-pub use ssb::Whoami;
+pub use ssb::{Whoami, Get};
 
 /// Take ownership of an AsyncRead and an AsyncWrite to create an ssb client.
 ///
@@ -133,6 +136,12 @@ impl<R: AsyncRead, W: AsyncWrite> Client<R, W> {
     pub fn whoami(&mut self) -> (SendRpc<W>, Whoami<R>) {
         ssb::whoami(self)
     }
+
+    #[cfg(feature = "ssb")]
+    /// Get a `Message` of type `T` by its `MessageId`..
+    pub fn get<T: DeserializeOwned>(&mut self, id: MessageId) -> (SendRpc<W>, Get<R, T>) {
+        ssb::get(self, id)
+    }
 }
 
 /// A future that has to be polled in order to receive responses from the server.
@@ -185,6 +194,10 @@ impl<W: AsyncWrite> SendRpc<W> {
     fn new_sync(out_sync: OutSync<W>) -> SendRpc<W> {
         SendRpc(_SendRpc::Sync(out_sync))
     }
+
+    fn new_async(out_async: OutAsync<W>) -> SendRpc<W> {
+        SendRpc(_SendRpc::Async(out_async))
+    }
 }
 
 impl<W: AsyncWrite> Future for SendRpc<W> {
@@ -196,12 +209,14 @@ impl<W: AsyncWrite> Future for SendRpc<W> {
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
         match self.0 {
             _SendRpc::Sync(ref mut out_sync) => out_sync.poll(),
+            _SendRpc::Async(ref mut out_async) => out_async.poll(),
         }
     }
 }
 
 enum _SendRpc<W: AsyncWrite> {
     Sync(OutSync<W>),
+    Async(OutAsync<W>),
 }
 
 /// Return a future for setting up an encrypted connection via the given transport

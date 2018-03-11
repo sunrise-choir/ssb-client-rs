@@ -2,9 +2,11 @@
 
 use futures::prelude::*;
 use tokio_io::{AsyncRead, AsyncWrite};
-use muxrpc::{InSyncResponse, ConnectionRpcError};
+use muxrpc::{InSyncResponse, InAsyncResponse, ConnectionRpcError};
+use serde::de::DeserializeOwned;
 use serde_json::Value;
-use ssb_rpc::ssb::{Whoami as RpcWhoami, WhoamiResponse};
+use ssb_common::links::MessageId;
+use ssb_rpc::ssb::{Whoami as RpcWhoami, WhoamiResponse, Get as RpcGet};
 
 use super::{Client, SendRpc};
 
@@ -24,6 +26,25 @@ pub struct Whoami<R: AsyncRead>(InSyncResponse<R, WhoamiResponse, Value>);
 
 impl<R: AsyncRead> Future for Whoami<R> {
     type Item = WhoamiResponse;
+    type Error = ConnectionRpcError<Value>;
+
+    fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
+        self.0.poll()
+    }
+}
+
+pub fn get<R: AsyncRead, W: AsyncWrite, T: DeserializeOwned>(client: &mut Client<R, W>,
+                                                             id: MessageId)
+                                                             -> (SendRpc<W>, Get<R, T>) {
+    let (req, res) = client.0.async::<RpcGet, T, Value>(&RpcGet::new(id));
+    (SendRpc::new_async(req), Get(res))
+}
+
+/// Get a `Message` by its `MessageId`.
+pub struct Get<R: AsyncRead, T: DeserializeOwned>(InAsyncResponse<R, T, Value>);
+
+impl<R: AsyncRead, T: DeserializeOwned> Future for Get<R, T> {
+    type Item = T;
     type Error = ConnectionRpcError<Value>;
 
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
