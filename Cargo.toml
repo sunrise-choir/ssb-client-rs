@@ -5,7 +5,7 @@ authors = ["AljoschaMeyer <mail@aljoscha-meyer.de>"]
 description = "A client library for interfacing with ssb."
 repository = "https://github.com/ssbc/ssb-client-rs"
 readme = "README.md"
-license = "GPL-3.0"
+license = "AGPL-3.0"
 
 [features]
 default = ["ssb"]
