@@ -36,38 +36,38 @@ extern crate ssb_rpc;
 extern crate tokio_io;
 #[macro_use]
 extern crate lazy_static;
+extern crate box_stream;
+extern crate secret_handshake;
+extern crate secret_stream;
 extern crate serde;
 extern crate serde_json;
-extern crate ssb_keyfile;
-extern crate secret_stream;
-extern crate secret_handshake;
-extern crate box_stream;
 extern crate sodiumoxide;
+extern crate ssb_keyfile;
 #[cfg(test)]
 extern crate tokio;
 
 use std::convert::{From, TryInto};
 use std::io;
 
-use futures::prelude::*;
+use box_stream::BoxDuplex;
 use futures::future::Then;
+use futures::prelude::*;
 use futures::unsync::oneshot::Canceled;
-use muxrpc::{muxrpc, RpcIn, RpcOut, Closed as RpcClosed, CloseRpc, RpcError, OutSync, OutAsync};
-use tokio_io::{AsyncRead, AsyncWrite};
-use tokio_io::io::{ReadHalf, WriteHalf};
-use ssb_keyfile::{KeyfileError, load_or_create_keys};
+use muxrpc::{muxrpc, CloseRpc, Closed as RpcClosed, OutAsync, OutSync, RpcError, RpcIn, RpcOut};
+use secret_handshake::ClientHandshakeFailure;
 use secret_stream::OwningClient;
+use serde::de::DeserializeOwned;
+use sodiumoxide::crypto::box_;
 use ssb_common::MAINNET_IDENTIFIER;
 use ssb_common::links::MessageId;
-use sodiumoxide::crypto::box_;
-use box_stream::BoxDuplex;
-use secret_handshake::ClientHandshakeFailure;
-use serde::de::DeserializeOwned;
+use ssb_keyfile::{load_or_create_keys, KeyfileError};
+use tokio_io::io::{ReadHalf, WriteHalf};
+use tokio_io::{AsyncRead, AsyncWrite};
 
 #[cfg(feature = "ssb")]
 mod ssb;
 #[cfg(feature = "ssb")]
-pub use ssb::{Whoami, Get};
+pub use ssb::{Get, Whoami};
 
 /// Take ownership of an AsyncRead and an AsyncWrite to create an ssb client.
 ///
@@ -258,13 +258,15 @@ pub fn easy_ssb<T: AsyncRead + AsyncWrite>(transport: T) -> Result<EasySsb<T>, K
     let sk = sk.try_into().unwrap();
     let (ephemeral_pk, ephemeral_sk) = box_::gen_keypair();
 
-    Ok(EasySsb::new(OwningClient::new(transport,
-                                      MAINNET_IDENTIFIER.clone(),
-                                      pk,
-                                      sk,
-                                      ephemeral_pk,
-                                      ephemeral_sk,
-                                      pk)))
+    Ok(EasySsb::new(OwningClient::new(
+        transport,
+        MAINNET_IDENTIFIER.clone(),
+        pk,
+        sk,
+        ephemeral_pk,
+        ephemeral_sk,
+        pk,
+    )))
 }
 
 type AR<T> = ReadHalf<BoxDuplex<T>>;
@@ -273,29 +275,25 @@ type ClientTriple<T> = (Client<AR<T>, AW<T>>, Receive<AR<T>, AW<T>>, Closed<AW<T
 
 /// A future for setting up an encrypted connection via the given AsyncRead and AsyncWrite
 /// (using keys from the ssb keyfile) and then calling `ssb` on the connection.
-pub struct EasySsb<T: AsyncRead + AsyncWrite>(Then<OwningClient<T>,
-                                                    Result<ClientTriple<T>, EasySsbError<T>>,
-                                                    fn(Result<Result<BoxDuplex<T>,
-                                                                     (ClientHandshakeFailure,
-                                                                      T)>,
-                                                              (io::Error, T)>)
-                                                       -> Result<ClientTriple<T>,
-                                                                  EasySsbError<T>>>);
+pub struct EasySsb<T: AsyncRead + AsyncWrite>(
+    Then<
+        OwningClient<T>,
+        Result<ClientTriple<T>, EasySsbError<T>>,
+        fn(Result<Result<BoxDuplex<T>, (ClientHandshakeFailure, T)>, (io::Error, T)>)
+            -> Result<ClientTriple<T>, EasySsbError<T>>,
+    >,
+);
 
 impl<T: AsyncRead + AsyncWrite> EasySsb<T> {
     fn new(secret_client: OwningClient<T>) -> EasySsb<T> {
         EasySsb(secret_client.then(|res| match res {
-                                       Ok(Ok(duplex)) => {
-            let (read, write) = duplex.split();
-            Ok(ssb(read, write))
-        }
-                                       Ok(Err((failure, transport))) => {
-                                           Err(EasySsbError::FailedHandshake(failure, transport))
-                                       }
-                                       Err((err, transport)) => {
-                                           Err(EasySsbError::IoError(err, transport))
-                                       }
-                                   }))
+            Ok(Ok(duplex)) => {
+                let (read, write) = duplex.split();
+                Ok(ssb(read, write))
+            }
+            Ok(Err((failure, transport))) => Err(EasySsbError::FailedHandshake(failure, transport)),
+            Err((err, transport)) => Err(EasySsbError::IoError(err, transport)),
+        }))
     }
 }
 
@@ -319,11 +317,11 @@ pub enum EasySsbError<T> {
 
 #[cfg(test)]
 mod tests {
-    use std::net::{SocketAddr, Ipv6Addr};
+    use std::net::{Ipv6Addr, SocketAddr};
 
+    use ssb_common::*;
     use tokio::executor::current_thread;
     use tokio::net::TcpStream;
-    use ssb_common::*;
 
     use super::*;
 
@@ -333,22 +331,24 @@ mod tests {
         let addr = SocketAddr::new(Ipv6Addr::localhost().into(), DEFAULT_TCP_PORT);
 
         current_thread::run(|_| {
-            current_thread::spawn(TcpStream::connect(&addr)
-            .and_then(|tcp| easy_ssb(tcp).unwrap().map_err(|err| panic!("{:?}", err)))
-            .map_err(|err| panic!("{:?}", err))
-            .map(|(mut client, receive, _)| {
-                current_thread::spawn(receive.map_err(|err| panic!("{:?}", err)));
+            current_thread::spawn(
+                TcpStream::connect(&addr)
+                    .and_then(|tcp| easy_ssb(tcp).unwrap().map_err(|err| panic!("{:?}", err)))
+                    .map_err(|err| panic!("{:?}", err))
+                    .map(|(mut client, receive, _)| {
+                        current_thread::spawn(receive.map_err(|err| panic!("{:?}", err)));
 
-                let (send_request, response) = client.whoami();
+                        let (send_request, response) = client.whoami();
 
-                current_thread::spawn(send_request.map_err(|err| panic!("{:?}", err)));
-                current_thread::spawn(response
-                                          .map(|res| println!("{:?}", res))
-                                          .map_err(|err| panic!("{:?}", err))
-                                          .and_then(|_| {
-                                                        client.close().map_err(|err| panic!("{:?}", err))
-                                                    }));
-            }))
+                        current_thread::spawn(send_request.map_err(|err| panic!("{:?}", err)));
+                        current_thread::spawn(
+                            response
+                                .map(|res| println!("{:?}", res))
+                                .map_err(|err| panic!("{:?}", err))
+                                .and_then(|_| client.close().map_err(|err| panic!("{:?}", err))),
+                        );
+                    }),
+            )
         });
     }
 }

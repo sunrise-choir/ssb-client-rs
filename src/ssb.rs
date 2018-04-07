@@ -1,24 +1,22 @@
 //! The core ssb rpcs.
 
 use futures::prelude::*;
-use tokio_io::{AsyncRead, AsyncWrite};
-use muxrpc::{InSyncResponse, InAsyncResponse, ConnectionRpcError};
+use muxrpc::{ConnectionRpcError, InAsyncResponse, InSyncResponse};
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 use ssb_common::links::MessageId;
 use ssb_common::messages::Message;
-use ssb_rpc::ssb::{Whoami as RpcWhoami, WhoamiResponse, Get as RpcGet};
+use ssb_rpc::ssb::{Get as RpcGet, Whoami as RpcWhoami, WhoamiResponse};
+use tokio_io::{AsyncRead, AsyncWrite};
 
 use super::{Client, SendRpc};
 
 pub fn whoami<R: AsyncRead, W: AsyncWrite>(client: &mut Client<R, W>) -> (SendRpc<W>, Whoami<R>) {
     lazy_static! {
-       static ref WHOAMI: RpcWhoami = RpcWhoami::new();
-   }
+        static ref WHOAMI: RpcWhoami = RpcWhoami::new();
+    }
 
-    let (req, res) = client
-        .0
-        .sync::<RpcWhoami, WhoamiResponse, Value>(&WHOAMI);
+    let (req, res) = client.0.sync::<RpcWhoami, WhoamiResponse, Value>(&WHOAMI);
     (SendRpc::new_sync(req), Whoami(res))
 }
 
@@ -34,9 +32,10 @@ impl<R: AsyncRead> Future for Whoami<R> {
     }
 }
 
-pub fn get<R: AsyncRead, W: AsyncWrite, T: DeserializeOwned>(client: &mut Client<R, W>,
-                                                             id: MessageId)
-                                                             -> (SendRpc<W>, Get<R, T>) {
+pub fn get<R: AsyncRead, W: AsyncWrite, T: DeserializeOwned>(
+    client: &mut Client<R, W>,
+    id: MessageId,
+) -> (SendRpc<W>, Get<R, T>) {
     let (req, res) = client
         .0
         .async::<RpcGet, Message<T>, Value>(&RpcGet::new(id));
