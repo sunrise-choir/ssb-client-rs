@@ -1,6 +1,17 @@
 //! A client library for interfacing with ssb.
 //!
-//! ```rust,ignore
+//! ```rust
+//! #![feature(ip_constructors)]
+//! extern crate sodiumoxide;
+//! extern crate ssb_common;
+//! extern crate ssb_client;
+//! extern crate tokio;
+//! use std::net::{Ipv6Addr, SocketAddr};
+//! use tokio::executor::current_thread;
+//! use tokio::net::TcpStream;
+//! use tokio::prelude::Future;
+//! use ssb_common::DEFAULT_TCP_PORT;
+//! use ssb_client::easy_ssb;
 //! sodiumoxide::init();
 //! let addr = SocketAddr::new(Ipv6Addr::localhost().into(), DEFAULT_TCP_PORT);
 //!
